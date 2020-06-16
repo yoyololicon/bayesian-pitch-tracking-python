@@ -1,0 +1,3 @@
+[submodule "fastf0"]
+	path = fastf0
+	url = https://github.com/LimingShi/Bayesian-Pitch-Tracking-Using-Harmonic-model
