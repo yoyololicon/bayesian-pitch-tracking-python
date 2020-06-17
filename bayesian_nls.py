@@ -1,5 +1,7 @@
 import numpy as np
 from audiolazy.lazy_lpc import levinson_durbin
+#from statsmodels.tsa.stattools import levinson_durbin
+from spectrum import LEVINSON
 from scipy.signal import lfilter, get_window
 from scipy.stats import norm
 import math
@@ -58,6 +60,7 @@ class Bayesian_Fast_F0(object):
                  voicing_p=0.7,
                  speech_var=5e-6,
                  cost_function='nls',
+                 prew=False,
                  **kwargs):
         self.sr = sr
         self.hop_size = hop_size
@@ -69,7 +72,8 @@ class Bayesian_Fast_F0(object):
             self.small_nfft <<= 1
         self.speech_var = speech_var
 
-        self.denoiser = Noise_Estimator(**kwargs)
+        if prew:
+            self.denoiser = Noise_Estimator(**kwargs)
         self.voicing_prior = voicing_p
 
         self.min_idx = int(nfft * min_freq / sr)
@@ -80,7 +84,7 @@ class Bayesian_Fast_F0(object):
         self.pitch_num = len(valid_idxs)
         self.harm_idxs = valid_idxs[:, None] * np.arange(1, self.L + 1)
         np.clip(self.harm_idxs, 0, self.F // 2 + 1, out=self.harm_idxs)
-        self.harm_idxs[np.where(self.harm_idxs > self.F // 2)] = self.F // 2 + 1
+        #self.harm_idxs[np.where(self.harm_idxs > self.F // 2)] = self.F // 2 + 1
         self.cost_matrix = np.zeros((self.pitch_num, self.L))
         self.cost_mask = self.harm_idxs < self.F / 2
         self.pitch_ll = np.zeros_like(self.cost_matrix)
@@ -115,20 +119,27 @@ class Bayesian_Fast_F0(object):
         self.cost_func = self._hs_cost_function if cost_function is 'hs' else self._nls_cost_function
 
     def __call__(self, x: np.array):
-        x_norm = np.linalg.norm(x)
-        pseudo_spec = np.abs(np.fft.rfft(x, self.small_nfft)) ** 2
-        est_noise = self.denoiser(pseudo_spec)
-        noise_corr = np.fft.irfft(est_noise)
-        filter_obj = levinson_durbin(noise_corr, 30)
-        filter_coef = list(list(filter_obj)[0].values())
-        xp = lfilter(filter_coef, 1, x)
-        xp *= x_norm / np.linalg.norm(xp)
+        if hasattr(self, 'denoiser'):
+            x_norm = np.linalg.norm(x)
+            pseudo_spec = np.abs(np.fft.rfft(x, self.small_nfft)) ** 2
+            est_noise = self.denoiser(pseudo_spec)
+            noise_corr = np.fft.irfft(est_noise)
+            filter_coef, *_ = LEVINSON(noise_corr, 30)
+            xp = lfilter([1] + filter_coef.tolist(), 1, x)
+            xp *= x_norm / np.linalg.norm(xp)
+        else:
+            xp = x
+
         self.cost_func(xp)
+
+        #plt.imshow(self.cost_matrix, aspect='auto')
+        #plt.show()
 
         delta = 3  # g prior
         gHat, tauVar = self._laplace_params(self.cost_matrix, 1,
                                             (self.N - 2 * np.arange(1, self.L + 1) - delta) / 2,
                                             self.N / 2)
+
         self.pitch_ll[:] = np.log(gHat * (delta - 2) * 0.5) + (
                 self.N - 2 * np.arange(1, self.L + 1) - delta) * 0.5 * np.log1p(gHat) - self.N * 0.5 * np.log1p(
             gHat * (1 - self.cost_matrix)) + 0.5 * np.log(2 * math.pi * tauVar)
@@ -274,6 +285,7 @@ class Bayesian_Fast_F0(object):
 
             self.cost_matrix[:, l] = np.sum(Zc[:l + 1].real * ls_sol1, 0) + np.sum(Zc[:l + 1].imag * ls_sol2, 0)
         self.cost_matrix /= x @ x + self.speech_var * self.N
+        self.cost_matrix[~self.cost_mask] = np.nan
         return
 
     def _laplace_params(self, cod, v, w, u):
@@ -309,7 +321,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Bayesian Pitch Tracking Using Harmonic model and Fast NLS')
     parser.add_argument('infile', type=str)
-    parser.add_argument('--segment_length', default=0.032, type=float)
+    parser.add_argument('--segment_length', default=0.025, type=float)
     parser.add_argument('--segment_shift', default=0.01, type=float)
     parser.add_argument('-L', '--max_order', default=30, type=int)
     parser.add_argument('--cost_function', default='nls', type=str)
@@ -324,7 +336,7 @@ if __name__ == '__main__':
     if sr != 16000:
         y = resample(y, sr, 16000)
         sr = 16000
-    # y += np.random.randn(*y.shape) * 0.01
+    y += np.random.randn(*y.shape) * 0.1
 
     plt.plot(y)
     plt.show()
@@ -335,7 +347,7 @@ if __name__ == '__main__':
     import librosa
 
     S = np.log(np.abs(librosa.stft(y, n_fft=1024, hop_length=hop)))
-    p = bayesian_nls(y, sr, N, hop)
+    p = bayesian_nls(y, sr, N, hop, max_order=10, min_freq=100, max_freq=1000, prew=False)
     ax = plt.subplot(4, 1, 1)
     plt.imshow(S, aspect='auto', origin='lower')
     plt.subplot(4, 1, 2, sharex=ax)
