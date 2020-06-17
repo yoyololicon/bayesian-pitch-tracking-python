@@ -1,8 +1,6 @@
 import numpy as np
-from audiolazy.lazy_lpc import levinson_durbin
-#from statsmodels.tsa.stattools import levinson_durbin
 from spectrum import LEVINSON
-from scipy.signal import lfilter, get_window
+from scipy.signal import lfilter
 from scipy.stats import norm
 import math
 import matplotlib.pyplot as plt
@@ -84,7 +82,6 @@ class Bayesian_Fast_F0(object):
         self.pitch_num = len(valid_idxs)
         self.harm_idxs = valid_idxs[:, None] * np.arange(1, self.L + 1)
         np.clip(self.harm_idxs, 0, self.F // 2 + 1, out=self.harm_idxs)
-        #self.harm_idxs[np.where(self.harm_idxs > self.F // 2)] = self.F // 2 + 1
         self.cost_matrix = np.zeros((self.pitch_num, self.L))
         self.cost_mask = self.harm_idxs < self.F / 2
         self.pitch_ll = np.zeros_like(self.cost_matrix)
@@ -132,8 +129,6 @@ class Bayesian_Fast_F0(object):
 
         self.cost_func(xp)
 
-        #plt.imshow(self.cost_matrix, aspect='auto')
-        #plt.show()
 
         delta = 3  # g prior
         gHat, tauVar = self._laplace_params(self.cost_matrix, 1,
